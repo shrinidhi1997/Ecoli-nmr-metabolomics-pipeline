@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below, alongside the accompanying paper (add paper details once available)."
+title: "E. coli NMR Metabolomics Pipeline"
+type: software
+authors:
+  - family-names: Bhat
+    given-names: Shrinidhi
+    affiliation: "DMST, Indian Institute of Technology Madras"
+date-released: 2026-10-17
+license: MIT
