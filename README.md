@@ -1,6 +1,5 @@
 # E. coli NMR Metabolomics Pipeline
 
-Developed by Shrinidhi Bhat, DMST, Indian Institute of Technology Madras.
 
 A pipeline for comparing two groups of 1D ¹H NMR spectra from Bruker TopSpin,
 built for an *E. coli* metabolomics study but written to run on any two-group
