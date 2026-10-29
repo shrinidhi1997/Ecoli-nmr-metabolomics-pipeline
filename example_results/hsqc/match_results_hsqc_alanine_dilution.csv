@@ -1,0 +1,6 @@
+sample_id,compound_id,compound_name,n_ref,n_exp,n_matched,n_distinct_matched,coverage,purity,shift_score,evidence_score,confidence
+std_0.5mM,DEMO_ALANINE,"L-Alanine (demo reference, not from build_bmrb_library.py)",2,2,2,2,1.0,1.0,0.6984,0.5,0.7495
+std_10mM,DEMO_ALANINE,"L-Alanine (demo reference, not from build_bmrb_library.py)",2,2,2,2,1.0,1.0,0.761,0.5,0.7691
+std_1mM,DEMO_ALANINE,"L-Alanine (demo reference, not from build_bmrb_library.py)",2,2,2,2,1.0,1.0,0.6984,0.5,0.7495
+std_2mM,DEMO_ALANINE,"L-Alanine (demo reference, not from build_bmrb_library.py)",2,2,2,2,1.0,1.0,0.6984,0.5,0.7495
+std_5mM,DEMO_ALANINE,"L-Alanine (demo reference, not from build_bmrb_library.py)",2,2,2,2,1.0,1.0,0.761,0.5,0.7691

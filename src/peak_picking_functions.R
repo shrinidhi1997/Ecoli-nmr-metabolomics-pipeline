@@ -34,7 +34,7 @@
 #
 # Defaults (noise_mult = 1.5, cluster_tol = 0.004) were tuned against
 # a real 839-point TopSpin export and landed at 275 peaks, inside the
-# 200-300 range asked for. Raise noise_mult for fewer, more
+# 200-300 target range. Raise noise_mult for fewer, more
 # conservative peaks; lower it for more. Raise cluster_tol to merge
 # more aggressively.
 pick_strong_peaks <- function(ppm, intensity, noise_window = 15,

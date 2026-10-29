@@ -1,0 +1,3 @@
+compound_id,compound_name,h_ppm,c_ppm
+DEMO_ALANINE,"L-Alanine (demo reference, not from build_bmrb_library.py)",1.47,16.9
+DEMO_ALANINE,"L-Alanine (demo reference, not from build_bmrb_library.py)",3.78,51.3

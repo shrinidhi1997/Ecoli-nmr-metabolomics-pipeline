@@ -1,0 +1,37 @@
+Package: nmrpick
+Type: Package
+Title: Baseline Correction and Peak Detection for 1D NMR Metabolomics
+Version: 0.1.0
+Authors@R: c(
+    person("Shrinidhi", "Bhat", role = c("aut", "cre"),
+           email = "shrinidhibhat59@gmail.com"),
+    person("Satyam", role = "aut"),
+    person("Senthamizh", "R", role = "aut"),
+    person("Subhendu Kumar", "Nayak", role = "aut"),
+    person("Sanjukta", "Patra", role = "aut"))
+Description: Baseline correction (airPLS and a lighter binned-percentile
+    alternative), dual-algorithm peak detection (shape/prominence-based
+    and second-derivative), optional Lorentzian lineshape refinement,
+    cross-sample peak alignment, and the per-compound group-comparison
+    statistics (fold-change, Welch's t-test, exact Wilcoxon rank-sum
+    test, Benjamini-Hochberg correction) used by this project's 1D 1H
+    NMR metabolomics pipeline. Companion package to 'nmrmatch', which
+    handles reference-library matching and confidence scoring. No
+    Bioconductor dependency is required for the core functions; a direct
+    Bruker 1D reader is included as an alternative to ASICS's own
+    importSpectraBruker() for users who do not already have ASICS
+    installed.
+License: MIT + file LICENSE
+Encoding: UTF-8
+RoxygenNote: 7.3.1
+Imports:
+    stats,
+    utils
+Suggests:
+    ggplot2,
+    ggrepel,
+    ASICS,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+URL: https://github.com/shrinidhi1997/Ecoli-nmr-metabolomics-pipeline
+BugReports: https://github.com/shrinidhi1997/Ecoli-nmr-metabolomics-pipeline/issues

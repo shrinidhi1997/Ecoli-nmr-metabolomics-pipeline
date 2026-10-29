@@ -1,0 +1,6 @@
+sample_id,concentration_mM,matched_intensity_mean,n_distinct_matched,coverage,confidence
+std_0.5mM,0.5,97.671385,4,0.6667,0.7971
+std_1mM,1.0,176.515187,4,0.6667,0.7972
+std_2mM,2.0,256.48208,6,1.0,0.8926
+std_5mM,5.0,631.858793,6,1.0,0.8926
+std_10mM,10.0,1254.214909,6,1.0,0.8926

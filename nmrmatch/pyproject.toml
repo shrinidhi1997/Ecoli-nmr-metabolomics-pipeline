@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nmrmatch"
+version = "0.1.0"
+description = "Reference-library matching, confidence scoring, and fold-change computation for 1D NMR metabolomics. Companion package to 'nmrpick', which handles baseline correction, peak detection, and group-comparison statistics."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+    { name = "Shrinidhi Bhat", email = "shrinidhibhat59@gmail.com" },
+    { name = "Satyam" },
+    { name = "Senthamizh R" },
+    { name = "Subhendu Kumar Nayak" },
+    { name = "Sanjukta Patra" },
+]
+keywords = ["nmr", "metabolomics", "peak-matching", "chemical-shift", "e-coli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "requests",
+    "beautifulsoup4",
+]
+
+[project.urls]
+Homepage = "https://github.com/shrinidhi1997/Ecoli-nmr-metabolomics-pipeline"
+Issues = "https://github.com/shrinidhi1997/Ecoli-nmr-metabolomics-pipeline/issues"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+nmrmatch-match = "nmrmatch.matching:main"
+nmrmatch-match-feature-table = "nmrmatch.cli.match_feature_table:main"
+nmrmatch-fold-change = "nmrmatch.fold_change:main"
+nmrmatch-fetch-reference = "nmrmatch.reflib.fetch:main"
+nmrmatch-filter-ecoli = "nmrmatch.reflib.filter_ecoli:main"
+nmrmatch-merge-libraries = "nmrmatch.reflib.merge:main"
+nmrmatch-build-bmrb = "nmrmatch.reflib.build_bmrb:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

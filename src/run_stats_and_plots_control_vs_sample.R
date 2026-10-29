@@ -43,6 +43,12 @@
 if (!requireNamespace("ggplot2", quietly = TRUE)) install.packages("ggplot2")
 library(ggplot2)
 
+if (!requireNamespace("nmrpick", quietly = TRUE)) {
+  stop("Package 'nmrpick' is not installed. From an R session: ",
+       'devtools::install_github("shrinidhi1997/Ecoli-nmr-metabolomics-pipeline", subdir = "nmrpick")')
+}
+library(nmrpick)
+
 source("config_control_vs_sample.R")
 matches_file <- file.path(out_base, "compound_matches_control_vs_sample.csv")
 out_dir <- file.path(out_base, "figures")
@@ -102,105 +108,35 @@ if (nrow(matches) == 0) {
 }
 
 # -------------------------------------------------------------------
-# display_name: two different compound_ids can share one compound_name
-# (confirmed real case earlier in this project: "taurine" =
-# bmse000120 and bmse000863). Using compound_name alone as a ggplot
-# category or heatmap row label would either crash (duplicated factor
-# level) or silently merge two physically different compounds' data
-# together. Append "[compound_id]" ONLY to the colliding names, so the
-# common case (one compound_id per name) stays readable as-is.
-# -------------------------------------------------------------------
-id_to_name <- unique(matches[, c("compound_id", "compound_name")])
-name_counts <- table(id_to_name$compound_name)
-colliding_names <- names(name_counts[name_counts > 1])
-matches$display_name <- ifelse(
-  matches$compound_name %in% colliding_names,
-  paste0(matches$compound_name, " [", matches$compound_id, "]"),
-  matches$compound_name
-)
-if (length(colliding_names) > 0) {
-  message(length(colliding_names), " compound name(s) shared by more than one ",
-          "compound_id, disambiguated with [compound_id] in display_name: ",
-          paste(colliding_names, collapse = ", "))
-}
-
-# -------------------------------------------------------------------
-# One row per compound (keyed on compound_id, the real unique key --
+# Build the compound x sample matrix via nmrpick::build_compound_matrix()
+# -- one row per compound (keyed on compound_id, the real unique key --
 # never display_name/compound_name for lookups), one column per sample,
-# value = matched_intensity_mean. NA where that sample had no match for
-# that compound at all (dropped, not treated as a real zero).
+# value = matched_intensity_mean, NA where that sample had no match.
+# compound_keys$display_name disambiguates compound names shared by more
+# than one compound_id (a confirmed real case earlier in this project:
+# "taurine" = bmse000120 and bmse000863), appending "[compound_id]" ONLY
+# to the colliding names so the common case stays readable as-is. This
+# used to be inline code in this script; it is now one tested
+# package function.
 # -------------------------------------------------------------------
-compound_keys <- unique(matches[, c("compound_id", "compound_name", "display_name")])
-rownames(compound_keys) <- NULL
-wide <- matrix(NA_real_, nrow = nrow(compound_keys), ncol = length(all_samples),
-                dimnames = list(compound_keys$compound_id, all_samples))
-for (i in seq_len(nrow(matches))) {
-  r <- matches[i, ]
-  wide[as.character(r$compound_id), as.character(r$sample_id)] <- r$matched_intensity_mean
-}
+built <- build_compound_matrix(matches, all_samples)
+wide <- built$wide
+compound_keys <- built$compound_keys
 
 message("Loaded ", nrow(matches), " compound-match rows across ", length(all_samples),
         " sample(s), ", nrow(compound_keys), " unique compound(s).")
 
 # ============================================================
-# SECTION A -- per-compound Welch t-test + Wilcoxon + BH-FDR + fold-change.
-# Only compounds with >= 2 non-NA samples per group get a real p-value --
-# same floor used every previous round of this project (a "p-value" from
-# a single sample isn't one).
+# SECTION A -- per-compound Welch t-test + Wilcoxon + BH-FDR + fold-change,
+# via nmrpick::compound_stats_table(). Only compounds with >= 2 non-NA
+# samples per group get a real p-value -- same floor used every previous
+# round of this project (a "p-value" from a single sample isn't one).
+# See ?nmrpick::wilcoxon_exact_floor for why the exact Wilcoxon test
+# structurally can't clear p<0.05 at small per-group sample sizes; the
+# message below reports that floor for this exact dataset's group sizes.
 # ============================================================
-min_n_per_group <- 2
-wilcox_floor <- round(2 / choose(length(control_samples) + length(test_samples),
-                                  length(control_samples)), 4)
-
-compute_row <- function(i) {
-  cid <- compound_keys$compound_id[i]
-  cvals <- wide[cid, control_samples]
-  rvals <- wide[cid, test_samples]
-  cvals <- cvals[!is.na(cvals)]
-  rvals <- rvals[!is.na(rvals)]
-  if (length(cvals) < min_n_per_group || length(rvals) < min_n_per_group) return(NULL)
-
-  t_p <- tryCatch(t.test(rvals, cvals)$p.value, error = function(e) NA_real_)
-  w_p <- suppressWarnings(tryCatch(wilcox.test(rvals, cvals)$p.value, error = function(e) NA_real_))
-
-  mean_control <- mean(cvals)
-  mean_sample <- mean(rvals)
-  eps <- 1e-6
-  log2fc <- log2((mean_sample + eps) / (mean_control + eps))
-
-  data.frame(
-    compound_id = cid,
-    compound_name = compound_keys$compound_name[i],
-    display_name = compound_keys$display_name[i],
-    n_control = length(cvals), n_sample = length(rvals),
-    mean_control = mean_control, mean_sample = mean_sample,
-    log2fc = log2fc,
-    t_p_value = t_p, wilcox_p_value = w_p,
-    stringsAsFactors = FALSE
-  )
-}
-row_list <- lapply(seq_len(nrow(compound_keys)), compute_row)
-results <- do.call(rbind, row_list[!vapply(row_list, is.null, logical(1))])
-
-if (is.null(results) || nrow(results) == 0) {
-  stop("No compound had >= ", min_n_per_group, " samples per group with a ",
-       "matched_intensity_mean -- nothing to test. Check that ", matches_file,
-       " actually has data for these ", length(all_samples),
-       " samples (not just that the file exists).")
-}
-
-results$t_BH_q_value <- p.adjust(results$t_p_value, method = "BH")
-results$wilcox_BH_q_value <- p.adjust(results$wilcox_p_value, method = "BH")
-results <- results[order(-abs(results$log2fc)), ]
-rownames(results) <- NULL
-
-message(nrow(results), " of ", nrow(compound_keys), " compound(s) had >= ",
-        min_n_per_group, " samples per group and got a real p-value. Exact ",
-        "two-sided Wilcoxon floor at n=", length(control_samples), "/group is ~",
-        wilcox_floor, " -- don't expect many (or any) compounds to clear ",
-        "conventional significance by Wilcoxon alone at this sample size ",
-        "(see this file's header). Check t_BH_q_value/wilcox_BH_q_value in ",
-        "the CSV, not the raw p-values, before trusting any single compound.")
+results <- compound_stats_table(wide, compound_keys, control_samples, test_samples,
+                                 min_n_per_group = 2)
 
 out_csv <- file.path(out_base, "stats_control_vs_sample.csv")
 write.csv(results, out_csv, row.names = FALSE)
@@ -231,7 +167,8 @@ p_volcano <- ggplot(results, aes(x = log2fc, y = neg_log10_p, color = significan
                        length(control_samples), " vs ", length(test_samples), ")"),
        subtitle = paste0("Dashed line = uncorrected p = 0.05 (reference only -- with n=",
                           length(control_samples), "/group the exact Wilcoxon floor is ~",
-                          wilcox_floor, "; see stats_control_vs_sample.csv's t_BH_q_value and ",
+                          wilcoxon_exact_floor(length(control_samples), length(test_samples)),
+                          "; see stats_control_vs_sample.csv's t_BH_q_value and ",
                           "wilcox_BH_q_value columns, which are the ones to actually trust)"),
        x = "log2 fold change (sample / control)", y = "-log10(raw t-test p-value)") +
   theme_minimal(base_size = 11)

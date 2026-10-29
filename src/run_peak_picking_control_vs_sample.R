@@ -38,8 +38,11 @@
 #      for identification drift against the reference library.
 
 source("config_control_vs_sample.R")
-source("peak_picking_functions.R")
-source("baseline_peak_picking.R")
+if (!requireNamespace("nmrpick", quietly = TRUE)) {
+  stop("Package 'nmrpick' is not installed. From an R session: ",
+       'devtools::install_github("shrinidhi1997/Ecoli-nmr-metabolomics-pipeline", subdir = "nmrpick")')
+}
+library(nmrpick)
 
 library(ASICS)  # only for importSpectraBruker()/createSpectra() -- no ASICS() call below
 
@@ -194,21 +197,23 @@ write_metaboanalyst_csv(merged, sample_group_map, out_file)
 control_names_str <- paste(control_samples, collapse = ",")
 test_names_str <- paste(test_samples, collapse = ",")
 
-message("\nDone. Next, from a shell (not R -- use `python`, not `python3`, on Windows/conda):\n",
-        "  cd ../src\n",
-        "  python match_r_feature_table.py \\\n",
+message("\nDone. Next, from a shell (nmrmatch installed via `pip install -e ./nmrmatch` ",
+        "or from GitHub -- see nmrmatch/README.md):\n",
+        "  nmrmatch-match-feature-table \\\n",
         "      --feature-table ", out_file, " \\\n",
         "      --reference ../output/reference_peaks_combined_ecoli_only.csv \\\n",
         "      --tolerance 0.008 \\\n",
         "      --top-n 500 \\\n",
         "      --min-confidence 0.88 \\\n",
         "      --out ../output/control_vs_sample/compound_matches_control_vs_sample.csv\n",
+        "  (equivalently: python match_r_feature_table.py with the same flags, or ",
+        "python -m nmrmatch.cli.match_feature_table)\n",
         "\nThen EITHER (a), the full R stats+plots script (recommended -- t-test/",
         "Wilcoxon/BH-FDR plus 8 figures, reads control_samples/test_samples from ",
         "config_control_vs_sample.R, same as this script):\n",
         "  source(\"run_stats_and_plots_control_vs_sample.R\")\n",
         "\nOR (b), just the plain fold-change numbers with no R session and no plots:\n",
-        "  python compute_fold_induction.py \\\n",
+        "  nmrmatch-fold-change \\\n",
         "      --matches ../output/control_vs_sample/compound_matches_control_vs_sample.csv \\\n",
         "      --group control:", control_names_str, " \\\n",
         "      --group sample:", test_names_str, " \\\n",

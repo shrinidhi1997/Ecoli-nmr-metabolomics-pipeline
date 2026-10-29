@@ -132,18 +132,125 @@
 #             than either benchmark, this may still run a little low --
 #             try max_iter=3 and compare against your own TopSpin view
 #             rather than assume 4 is universally exact.
+detect_solvent_exclusion_range <- function(ppm, intensity, seed_center_ppm = 4.7,
+                                            seed_half_width_ppm = 0.7, floor_mult = 3) {
+  # Finds how far the water (or other dominant solvent) peak's tails
+  # actually extend on THIS sample, instead of assuming a fixed ppm
+  # window. Why this exists: a fixed window like c(3.9, 5.3) is a guess
+  # at how wide the water peak's tails are, and on real data it can be
+  # badly wrong in either direction -- too narrow leaves a strong
+  # residual tail just outside the window, which (once that ppm range is
+  # excluded from the baseline FIT specifically, not just peak
+  # detection) no longer gets smoothly bridged, since the fit now has to
+  # connect across the gap from a point that's still partway down the
+  # tail, not yet back at the real background level, producing a sharp
+  # spike in the corrected spectrum right at the edge; too wide throws
+  # away real peak territory the baseline fit didn't need to lose.
+  # Confirmed on real HAIRD/SWEPF data: c(3.9, 5.3) is too narrow --
+  # intensity at both 3.9 ppm and 5.3 ppm is still several times the
+  # spectrum's typical background level, nowhere near flat yet.
+  #
+  # Method: start from the tallest point near seed_center_ppm (the
+  # water peak itself), then walk outward on each side until intensity
+  # drops below floor_mult times a robust "typical background" estimate.
+  # That estimate is the 30th percentile taken ONLY over the
+  # conventional 0-10 ppm 1H window, not the full digitized sweep --
+  # this spectrometer digitizes well beyond that (roughly -3.75 to
+  # 16.3 ppm here), and most of that extra range is near-pure
+  # electronic noise close to zero, which otherwise drags a whole-
+  # spectrum percentile down to a tiny fraction of the real in-spectrum
+  # background level (confirmed: 87 a.u. whole-spectrum vs. ~1000-5000
+  # a.u. actually typical between real peaks in 0-10 ppm) and made this
+  # function's walk run away across almost the entire spectrum instead
+  # of stopping at the water peak's real extent.
+  typical_window <- ppm >= 0 & ppm <= 10
+  floor_source <- if (any(typical_window)) intensity[typical_window] else intensity
+  floor_val <- stats::quantile(floor_source, 0.30, names = FALSE)
+  thresh <- floor_mult * floor_val
+
+  seed_mask <- ppm >= (seed_center_ppm - seed_half_width_ppm) & ppm <= (seed_center_ppm + seed_half_width_ppm)
+  if (!any(seed_mask)) return(c(seed_center_ppm - seed_half_width_ppm, seed_center_ppm + seed_half_width_ppm))
+  center_idx <- which(seed_mask)[which.max(intensity[seed_mask])]
+
+  ord <- order(ppm)
+  ppm_s <- ppm[ord]; y_s <- intensity[ord]
+  center_pos <- which(ppm_s == ppm[center_idx])[1]
+  grid_spacing <- stats::median(diff(ppm_s))
+
+  # A single point below thresh isn't enough to call the tail over --
+  # a real, isolated analyte peak taller than thresh (common; that's
+  # what makes it a peak) would otherwise fool a point-by-point walk
+  # into reading right through the first brief dip after it and
+  # continuing outward, well past where the water tail actually ended
+  # (this is exactly what happened with a plain point-by-point walk:
+  # the detected range came out wider at higher concentration, where
+  # real aliphatic peaks are taller -- a tell that real peaks, not the
+  # water tail, were extending it). Requiring a SUSTAINED run below
+  # thresh (run_ppm wide, entirely below threshold) before declaring
+  # "back to baseline" is robust to that: an isolated real peak doesn't
+  # have run_ppm of genuinely quiet spectrum sitting right on top of it.
+  run_ppm <- 0.15
+  run_pts <- max(3, round(run_ppm / grid_spacing))
+
+  find_edge <- function(start_pos, step) {
+    pos <- start_pos
+    n <- length(y_s)
+    repeat {
+      pos <- pos + step
+      if (pos < 1 || pos > n) return(max(1, min(pos, n)))
+      window_idx <- if (step > 0) pos:min(pos + run_pts - 1, n) else max(pos - run_pts + 1, 1):pos
+      if (max(y_s[window_idx]) <= thresh) return(pos)
+    }
+  }
+  hi_pos <- find_edge(center_pos, 1L)
+  lo_pos <- find_edge(center_pos, -1L)
+
+  c(ppm_s[lo_pos], ppm_s[hi_pos])
+}
+
 fit_airpls_baseline <- function(ppm, intensity,
                                  control_point_spacing_ppm = 0.02,
                                  denoise_window_ppm = 0.01,
                                  lambda = 1e5,
                                  max_iter = 4,
-                                 ratio = 0.001) {
+                                 ratio = 0.001,
+                                 exclude = NULL) {
+  # exclude: optional list of c(lo, hi) ppm ranges (e.g. the water/DSS
+  # ranges find_shape_based_peaks() already excludes by default) to drop
+  # BEFORE the IRLS fit, not just from peak detection afterward.
+  #
+  # Why this matters: the asymmetric reweighting below (w_new[d>=0] <- 0)
+  # assumes peaks are reasonably narrow relative to the baseline's own
+  # curvature, so a genuine peak quickly gets zero weight and stops
+  # pulling the fit upward. A solvent peak (water, ~4.7-4.9 ppm) breaks
+  # that assumption: it can be 100-1000x taller than real signal and
+  # wide at its base (its shoulders bleed out to roughly 3.9-5.3 ppm),
+  # and with max_iter capped at 4 (deliberately low -- see this
+  # function's other callers' notes on full convergence biasing low in
+  # crowded regions), there isn't enough reweighting headroom to fully
+  # flatten the fit's response to something that extreme. The result,
+  # confirmed on real data (HAIRD/SWEPF standards): a broad hump in the
+  # fitted baseline centered on the water peak, bleeding into the
+  # neighboring signal region, with a small negative dip in the
+  # corrected spectrum right at the edge of whatever ppm range peak
+  # detection excludes.
+  #
+  # The direct fix is upstream of the reweighting entirely: never give
+  # the solver those control points in the first place. Dropping them
+  # here (same NA-then-interpolate path already used below for windows
+  # with no data at all) lets stats::approx()'s existing bridging step
+  # fill the gap smoothly from the real baseline on either side, instead
+  # of the fit ever seeing -- and partially tracking -- the solvent peak.
+  # NULL (the default) reproduces the exact old behavior for any
+  # existing caller that doesn't pass this.
   cp_ppm <- seq(min(ppm), max(ppm), by = control_point_spacing_ppm)
   half_win <- denoise_window_ppm / 2
   bounds <- .window_bounds(ppm, cp_ppm, half_win)
+  excl_mask <- rep(FALSE, length(cp_ppm))
+  for (rng in exclude) excl_mask <- excl_mask | (cp_ppm >= rng[1] & cp_ppm <= rng[2])
   cp_y <- numeric(length(cp_ppm))
   for (i in seq_along(cp_ppm)) {
-    cp_y[i] <- if (bounds$hi[i] >= bounds$lo[i]) {
+    cp_y[i] <- if (!excl_mask[i] && bounds$hi[i] >= bounds$lo[i]) {
       stats::median(intensity[bounds$lo[i]:bounds$hi[i]])
     } else {
       NA
@@ -175,6 +282,123 @@ fit_airpls_baseline <- function(ppm, intensity,
     w <- w_new
   }
   stats::approx(cp_ppm, z, xout = ppm, rule = 2)$y
+}
+
+# ==================================================================
+# PART 1b -- fit_binned_baseline()
+#
+# A different baseline estimator from fit_airpls_baseline() above, built
+# specifically to fix a real, confirmed problem with it on this project's
+# real HAIRD/SWEPF data: the water/solvent peak's broad hump in the fitted
+# baseline doesn't stay local. fit_airpls_baseline() solves ONE penalized
+# least-squares system over every control point at once (the `penalty`
+# matrix couples each point to its neighbours via a second-difference
+# smoothness term), so a huge, broad excursion anywhere in that system
+# (the water peak) pulls on the WHOLE fitted curve's shape to keep it
+# smooth overall, not just its own immediate neighbourhood. Confirmed
+# directly on real HAIRD-60-1H: with the plain airPLS fit, the baseline
+# sat measurably ABOVE the true local floor even 4-5 ppm away from the
+# water peak (far-field overshoot up to ~20,000 a.u., nowhere near the
+# peak), and right on the water peak's own falling shoulder (5.2-5.6 ppm)
+# it overshot the real signal there by 60-89%, which is exactly the
+# "baseline hallucinating / going beyond where it should" behavior
+# reported after the 0-11 ppm reporting-range fix (that fix cleaned up
+# digitization padding outside the real spectrum, it never touched this).
+#
+# This fixes it by doing the opposite of a single global smoothness-
+# penalized solve: split the spectrum into BIG ppm bins (bin_width_ppm,
+# much wider than any real single peak or multiplet cluster), take a
+# robust LOW PERCENTILE of the raw intensity within each bin as that
+# bin's background estimate, and interpolate LINEARLY between bin centers
+# -- no global penalty matrix, no cross-bin smoothing pass at all. Each
+# bin's own value only ever depends on what's actually inside it; nothing
+# 4 ppm away can pull it up or down, by construction. This is the direct
+# implementation of a two-part design goal:
+#   1. Ignore small peaks by using big bins --
+#      a real analyte peak (a single line or multiplet cluster, usually
+#      well under ~0.1 ppm wide) occupies a small fraction of a
+#      bin_width_ppm=0.2 bin, so a LOW percentile (pct=0.10 below) of
+#      that bin's ~600-1200 points lands close to the genuine quiet
+#      floor around it, the same way a median would, but more robust to
+#      a bin that's partly covered by peak -- the narrow peak just can't
+#      drag a low-enough percentile up much. Peak PICKING is untouched:
+#      find_shape_based_peaks() still runs on the exact same fine-grained
+#      raw (ppm, intensity) it always did, this only changes what
+#      baseline gets subtracted from it first.
+#   2. Let the baseline follow the broad water peak, then apply it to
+#      the sample -- there's no separate water-specific model here
+#      (every attempt at one, documented above and in fit_airpls_baseline's
+#      own notes, either fit the wrong lineshape or needed a hand-tuned
+#      window that was wrong on some sample/concentration). Instead, the
+#      SAME big-bin-plus-percentile rule is applied everywhere, and it
+#      naturally does both jobs on its own: where the water peak genuinely
+#      dominates a bin (its base is broad, several ppm wide -- unlike a
+#      real small-molecule line), even the 10th percentile of that bin
+#      reflects the peak's own real, broad shape, so the baseline still
+#      visibly follows it there, as intended.
+#      Where it doesn't dominate (everywhere else), the percentile reads
+#      the genuine quiet floor instead.
+#
+# IMPORTANT, found by direct testing: do NOT add a cross-bin smoothing
+# pass (a moving average across neighbouring bins' percentile values) on
+# top of this, even though the raw bin-to-bin curve looks a little
+# stair-steppy without one. Tried first with a 3-bin moving average: it
+# reintroduces almost exactly the same failure this function exists to
+# avoid, just over a much shorter range -- one bin sitting right on the
+# water peak's tall apex gets blended into its lower neighbouring bins,
+# so the falling shoulder (5.2-5.6 ppm on real HAIRD-120-1H) still
+# overshot the real signal there by 42-174% with smoothing on, vs. 0%
+# (no overshoot at all, confirmed numerically and visually against the
+# raw trace) with it off. Piecewise-linear interpolation between raw,
+# unsmoothed bin percentiles is the one that tested clean; use it as-is.
+#
+# Confirmed effect across all 6 real samples (HAIRD-30/60/120,
+# SWEPF-30/60/120), bin_width_ppm=0.2/pct=0.10 vs. the plain airPLS fit:
+# far-field overshoot (0-11 ppm, outside 3.3-6.3) dropped from
+# 2,367-20,123 a.u. down to 657-2,835; near-water relative overshoot
+# (3.3-6.3 ppm) dropped from +60%..+89% down to -7%..+6% (i.e. essentially
+# gone, baseline no longer runs above the real signal). The direct
+# consequence, also confirmed and worth knowing before trusting this:
+# peak counts (0-11 ppm) roughly doubled on some samples (e.g. HAIRD-60-1H
+# 60->200). Checked this wasn't a new artifact two ways -- (a) the extra
+# peaks' ppm values are uniformly distributed relative to the 0.2 ppm bin
+# edges (mean distance-to-nearest-edge ~0.052 ppm, close to the 0.05
+# expected by pure chance), not clustered at edges the way an
+# interpolation-kink artifact would be; (b) visually, in the two zones
+# that account for most of the increase (3.4-4.1 and 6.4-8.8 ppm), the
+# "new" peaks are tall, sharp, cleanly-isolated real multiplets sitting on
+# a near-zero corrected floor -- exactly the shape of real signal that the
+# old overshooting baseline was suppressing/flattening before, not noise
+# crossing a lowered threshold. The far-field 8.5-11 ppm zone (pure
+# digitization noise, same finding as the earlier 0-11 ppm reporting-range
+# fix) does pick up a handful of extra marginal detections there too; this
+# is the known limit of any baseline fit that has no real floor to compare
+# against in a region with no real signal at all, and -- same as before --
+# nothing in that range is expected to match a real compound downstream.
+#
+# bin_width_ppm: width of each big bin. 0.2 ppm tested well -- wide
+#             enough that a typical single line or multiplet cluster
+#             (usually <0.1 ppm) is a minority of the bin's points, narrow
+#             enough to still track real, slower background drift.
+# pct:        percentile of each bin's raw intensity used as its
+#             background estimate. 0.10 tested well; a real bin has
+#             hundreds to low thousands of points at typical real spectral
+#             density, so this is not a small-sample, noisy estimate.
+#             Lower (e.g. 0.05) pulls slightly closer to the true floor
+#             but starts to cost a little on far-field accuracy; higher
+#             (e.g. 0.25) is more sensitive to a bin where a peak takes up
+#             a larger share of it. See this function's own header note
+#             above for the numbers each choice produced on real data.
+fit_binned_baseline <- function(ppm, intensity, bin_width_ppm = 0.2, pct = 0.10) {
+  ord <- order(ppm)
+  ppm <- ppm[ord]; intensity <- intensity[ord]
+  bin_edges <- seq(min(ppm), max(ppm) + bin_width_ppm, by = bin_width_ppm)
+  bin_idx <- findInterval(ppm, bin_edges)
+  bin_centers <- as.numeric(tapply(ppm, bin_idx, mean))
+  bin_vals <- as.numeric(tapply(intensity, bin_idx, function(v) stats::quantile(v, pct, names = FALSE)))
+  o <- order(bin_centers)
+  bin_centers <- bin_centers[o]; bin_vals <- bin_vals[o]
+  stats::approx(bin_centers, bin_vals, xout = ppm, rule = 2)$y
 }
 
 # ==================================================================
@@ -1003,7 +1227,28 @@ find_shape_based_peaks_fragmented <- function(ppm, intensity,
 # removed because it overfit noise into fake extra peaks even on
 # already-clean, well-separated test cases.
 refine_peaks_lorentzian <- function(ppm, corrected, peak_tbl,
-                                     cluster_tol = 0.03, window_pad = 0.04) {
+                                     cluster_tol = 0.03, window_pad = 0.04,
+                                     center_bound_ppm = 0.015,
+                                     hwhm_bounds_ppm = c(0.001, 0.05)) {
+  # center_bound_ppm, hwhm_bounds_ppm: NEW, exposed rather than hardcoded,
+  # for one reason found while building the synthetic multiplet benchmark
+  # (accuracy/precision panels against known triplet/quartet ground
+  # truth -- see that benchmark's own scripts).
+  # These bounds were originally picked for THIS project's real 600 MHz
+  # E. coli data, where a real linewidth is essentially always
+  # >=0.007-0.01 ppm (several Hz) -- 0.001 ppm as a LOWER bound was never
+  # meant to be a meaningful physical floor there, just a "don't let the
+  # solver collapse to a spike" guard nowhere near real data. A narrower
+  # synthetic line (the benchmark's lw=1 Hz default, matching the
+  # MultiNMRFit comparison figure it's modeled on) can sit BELOW that
+  # floor at a high field (1 Hz FWHM = 0.5 Hz HWHM = 0.001042 ppm at 800
+  # MHz, 0.000625 ppm at 600 MHz) -- fitting with the old hardcoded bound
+  # would then measure the bound, not the detector's real resolving
+  # power, and silently bias every linewidth estimate high regardless of
+  # S/N. Defaults are UNCHANGED from the old hardcoded values, so no
+  # existing caller's behavior changes; the benchmark passes its own,
+  # tighter bound explicitly and reports results both ways (see that
+  # script's own notes).
   if (nrow(peak_tbl) == 0) {
     return(data.frame(ppm = numeric(0), intensity = numeric(0),
                        hwhm = numeric(0), area = numeric(0), converged = logical(0)))
@@ -1024,8 +1269,8 @@ refine_peaks_lorentzian <- function(ppm, corrected, peak_tbl,
     form <- as.formula(paste("y ~", paste(terms, collapse = " + ")))
     lower <- c(); upper <- c()
     for (i in seq_len(k)) {
-      lower <- c(lower, centers0[i] - 0.015, 0, 0.001)
-      upper <- c(upper, centers0[i] + 0.015, Inf, 0.05)
+      lower <- c(lower, centers0[i] - center_bound_ppm, 0, hwhm_bounds_ppm[1])
+      upper <- c(upper, centers0[i] + center_bound_ppm, Inf, hwhm_bounds_ppm[2])
     }
     tryCatch(
       stats::nls(form, data = list(x = x, y = y), start = start,

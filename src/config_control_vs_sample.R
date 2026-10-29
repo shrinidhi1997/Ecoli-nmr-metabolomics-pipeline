@@ -62,6 +62,21 @@ deriv_dedup_tol_ppm <- 0.004
 use_lorentzian_refinement <- FALSE
 alignment_tol_ppm <- 0.008
 
+# NOTE on the water/solvent peak's effect on the baseline fit: on real
+# data, fit_airpls_baseline() can form a broad hump tracking the water
+# peak's shoulders (visible in a full-spectrum plot of raw vs. fitted
+# baseline). A fix was tried here -- excluding a fixed ppm range around
+# the water peak from the fit itself -- and reverted: on real HAIRD/
+# SWEPF standards, the water peak's actual tail extent varies by sample
+# and concentration (confirmed: a fixed c(3.9, 5.3) window is too narrow
+# on some samples, creating a worse spike right at its edge once that
+# range is excluded from the fit; a data-driven attempt at detecting the
+# tail's real extent came out unstable, expanding to swallow large real
+# peak regions on some samples). fit_airpls_baseline() does accept an
+# `exclude` argument (see its own comment) if you want to experiment,
+# but nothing here passes it by default -- the hump is a known, visible,
+# bounded cosmetic artifact; the two things tried to fix it were worse.
+
 # ---------------------------------------------------------------------
 # 4. WHERE OUTPUT GOES
 # ---------------------------------------------------------------------

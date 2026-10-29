@@ -40,7 +40,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from utils import score_compound_2d
+from nmrmatch import score_compound_2d
 
 DEFAULT_TOLERANCE_H_PPM = 0.03
 DEFAULT_TOLERANCE_C_PPM = 0.4
